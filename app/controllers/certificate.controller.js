@@ -2,7 +2,7 @@ const certificateModel = require("../models/certificate.model");
 const moment = require("moment");
 const { handleError } = require("../utils/handleError");
 const userModel = require("../models/users.model");
-const { fn, col ,Op} = require("sequelize");
+const { fn, col ,Op, literal, Sequelize} = require("sequelize");
 
 exports.createCertificate = async (req,res,next) => {
     try{
@@ -88,6 +88,7 @@ exports.getCertificatesList = async (req,res,next) => {
     try {
         let {status,startDate,endDate,orderBy,orderSequence} = req.query;
 
+        const currentDate = moment().utc().toDate();
         let query = {};
         if(status || startDate || endDate){
             query = {where:{}};
@@ -140,17 +141,13 @@ exports.getCertificatesList = async (req,res,next) => {
                 query["order"].push(["startDate",orderType])
             }
             else{
-                // query["order"].push(["",orderType])
+                query["order"].push([fn("JSON_LENGTH",col("users")),orderType])
             }
         }
         const certificateList = await certificateModel?.findAll({
             include:{
                 model:userModel,
-                group:["user"],
-                attributes:[
-                    [fn("COUNT",col("userCertificates")),"usersEnrolled"]
-                ],
-                ...query
+                required:false,
             },
             attributes:[
                 "name",
@@ -159,13 +156,25 @@ exports.getCertificatesList = async (req,res,next) => {
                 "issuer",
                 "overview",
                 "startDate",
-                [fn("DATE_ADD",col("startDate"),fn("CONCAT","INTERVAL ",col("duration")," MONTH")),"endDate"],
-            ]
+                [fn("DATE_ADD",col("startDate"),literal("INTERVAL duration MONTH")),"endDate"]
+            ],
+            ...query
         });
+        let certificateListNew = certificateList;
+        if(status && status !== "DRAFT"){
+            certificateListNew = JSON.parse(JSON.stringify(certificateListNew))?.map(certificate => {
+                let isInFuture = moment(certificate.startDate).toDate() > currentDate;
+                let status = (moment(certificate.startDate).toDate() <= currentDate && moment(certificate.endDate).toDate() >= currentDate)?"Active":(isInFuture?"PUBLISHED":"Expired");
+                return {
+                    ...certificate,
+                    status
+                }
+            })
+        }
         return res.status(200).json({
-            certificateList
+            certificateList:certificateListNew
         })
     } catch (error) {
-        handleError(req,res,next);
+        handleError(req,res,error);
     }
 } 

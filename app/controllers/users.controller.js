@@ -1,4 +1,4 @@
-const { Op, col, where, fn } = require("sequelize");
+const { Op, col, where, fn, literal } = require("sequelize");
 const certificateModel = require("../models/certificate.model");
 const userCertificatesModel = require("../models/userCertificates.model");
 const userModel = require("../models/users.model");
@@ -120,7 +120,7 @@ exports.getUserCertificates = async (req, res, next) => {
         let query = {};
         if (startDate && endDate) {
             const startDateTime = moment(startDate).toDate();
-            const endDateTime = moment(endDate).toDate();
+            const endDateTime = moment(endDate).subtract(1,"second").toDate();
             query = {
                 where: {
                     ...query.where,
@@ -130,11 +130,9 @@ exports.getUserCertificates = async (req, res, next) => {
                                 [Op.between]: [startDateTime, endDateTime]
                             }
                         },
-                        {
-                            endDate: {
-                                [Op.between]: [startDateTime, endDateTime]
-                            }
-                        },
+                        where(fn("DATE_ADD",col("startDate"),literal("INTERVAL duration MONTH")),{
+                            [Op.between]: [startDateTime, endDateTime]
+                        }),
                         {
                             [Op.and]: [
                                 {
@@ -142,11 +140,9 @@ exports.getUserCertificates = async (req, res, next) => {
                                         [Op.lt]: startDateTime
                                     }
                                 },
-                                {
-                                    endDate: {
-                                        [Op.gt]: endDate
-                                    }
-                                }
+                                where(fn("DATE_ADD",col("startDate"),literal("INTERVAL duration MONTH")),{
+                                    [Op.gt]:currentDate
+                                })
                             ]
                         }
                     ]
@@ -159,38 +155,45 @@ exports.getUserCertificates = async (req, res, next) => {
             if (orderBy === "certificate_name") {
                 query["order"].push(["name", orderType])
             }
-            else if (orderBy === "startDate") {
-                query["order"].push(["startDate", orderType])
-            }
-            else {
-                // query["order"].push(["",orderType])
-            }
         }
         const userCertificates = await certificateModel?.findAll({
             where: {
+                status:{
+                    [Op.ne]:"DRAFT"
+                },
                 [Op.and]: [
                     {
                         startDate: {
                             [Op.lte]: currentDate
                         },
                     },
-                    where(fn("DATE_ADD",col("startDate"),fn("CONCAT", fn("literal","INTERVAL"),col("duration"),' MONTH')),{
+                    where(fn("DATE_ADD",col("startDate"),literal("INTERVAL duration MONTH")),{
                         [Op.gt]:currentDate
                     })
                 ],
-                ...query.where,
-                ...query.order
+                ...query.where
             },
             include: {
                 model: userModel
             },
+            ...(orderBy?{order:query.order}:{})
             // attributes:[
             //     "code","name","startDate","endDate",
             //     // [fn("JSON_LENGTH",col(""))]
             // ]
         });
+
+        const userCertificatesWithStatus = JSON.parse(JSON.stringify(userCertificates))?.map(certificate => {
+            const enrollmentStatus = (certificate?.users?.length)?"Enrolled":"Enroll Now";
+            return {
+                ...certificate,
+                enrollmentStatus,
+                users:null
+            }
+        });
+        console.log(userCertificatesWithStatus);
         return res.status(200).json({
-            userCertificates
+            userCertificates:userCertificatesWithStatus
         })
     } catch (error) {
         handleError(req, res, error);
